@@ -120,6 +120,10 @@ private:
 
 			Vector<AABB> bone_aabbs;
 
+			// Transform used in runtime bone AABBs compute.
+			// As bone AABBs are saved in Mesh space, but bones animation is in Skeleton space.
+			Transform3D mesh_to_skeleton_xform;
+
 			Vector4 uv_scale;
 
 			RID blend_shape_buffer;
@@ -149,6 +153,7 @@ private:
 		AABB aabb;
 		AABB custom_aabb;
 		uint64_t skeleton_aabb_version = 0;
+		RID skeleton_aabb_rid;
 
 		Vector<RID> material_cache;
 
@@ -156,6 +161,8 @@ private:
 
 		RID shadow_mesh;
 		HashSet<Mesh *> shadow_owners;
+
+		String path;
 
 		Dependency dependency;
 	};
@@ -213,6 +220,7 @@ private:
 		bool uses_custom_data = false;
 		int visible_instances = -1;
 		AABB aabb;
+		AABB custom_aabb;
 		bool aabb_dirty = false;
 		bool buffer_set = false;
 		bool motion_vectors_enabled = false;
@@ -235,6 +243,8 @@ private:
 
 		bool dirty = false;
 		MultiMesh *dirty_list = nullptr;
+
+		RendererMeshStorage::MultiMeshInterpolator interpolator;
 
 		Dependency dependency;
 	};
@@ -372,6 +382,9 @@ public:
 
 	virtual AABB mesh_get_aabb(RID p_mesh, RID p_skeleton = RID()) override;
 	virtual void mesh_set_shadow_mesh(RID p_mesh, RID p_shadow_mesh) override;
+
+	virtual void mesh_set_path(RID p_mesh, const String &p_path) override;
+	virtual String mesh_get_path(RID p_mesh) const override;
 
 	virtual void mesh_clear(RID p_mesh) override;
 
@@ -610,33 +623,38 @@ public:
 
 	bool owns_multimesh(RID p_rid) { return multimesh_owner.owns(p_rid); };
 
-	virtual RID multimesh_allocate() override;
-	virtual void multimesh_initialize(RID p_multimesh) override;
-	virtual void multimesh_free(RID p_rid) override;
+	virtual RID _multimesh_allocate() override;
+	virtual void _multimesh_initialize(RID p_multimesh) override;
+	virtual void _multimesh_free(RID p_rid) override;
 
-	virtual void multimesh_allocate_data(RID p_multimesh, int p_instances, RS::MultimeshTransformFormat p_transform_format, bool p_use_colors = false, bool p_use_custom_data = false) override;
-	virtual int multimesh_get_instance_count(RID p_multimesh) const override;
+	virtual void _multimesh_allocate_data(RID p_multimesh, int p_instances, RS::MultimeshTransformFormat p_transform_format, bool p_use_colors = false, bool p_use_custom_data = false) override;
+	virtual int _multimesh_get_instance_count(RID p_multimesh) const override;
 
-	virtual void multimesh_set_mesh(RID p_multimesh, RID p_mesh) override;
-	virtual void multimesh_instance_set_transform(RID p_multimesh, int p_index, const Transform3D &p_transform) override;
-	virtual void multimesh_instance_set_transform_2d(RID p_multimesh, int p_index, const Transform2D &p_transform) override;
-	virtual void multimesh_instance_set_color(RID p_multimesh, int p_index, const Color &p_color) override;
-	virtual void multimesh_instance_set_custom_data(RID p_multimesh, int p_index, const Color &p_color) override;
+	virtual void _multimesh_set_mesh(RID p_multimesh, RID p_mesh) override;
+	virtual void _multimesh_instance_set_transform(RID p_multimesh, int p_index, const Transform3D &p_transform) override;
+	virtual void _multimesh_instance_set_transform_2d(RID p_multimesh, int p_index, const Transform2D &p_transform) override;
+	virtual void _multimesh_instance_set_color(RID p_multimesh, int p_index, const Color &p_color) override;
+	virtual void _multimesh_instance_set_custom_data(RID p_multimesh, int p_index, const Color &p_color) override;
 
-	virtual RID multimesh_get_mesh(RID p_multimesh) const override;
+	virtual RID _multimesh_get_mesh(RID p_multimesh) const override;
 
-	virtual Transform3D multimesh_instance_get_transform(RID p_multimesh, int p_index) const override;
-	virtual Transform2D multimesh_instance_get_transform_2d(RID p_multimesh, int p_index) const override;
-	virtual Color multimesh_instance_get_color(RID p_multimesh, int p_index) const override;
-	virtual Color multimesh_instance_get_custom_data(RID p_multimesh, int p_index) const override;
+	virtual Transform3D _multimesh_instance_get_transform(RID p_multimesh, int p_index) const override;
+	virtual Transform2D _multimesh_instance_get_transform_2d(RID p_multimesh, int p_index) const override;
+	virtual Color _multimesh_instance_get_color(RID p_multimesh, int p_index) const override;
+	virtual Color _multimesh_instance_get_custom_data(RID p_multimesh, int p_index) const override;
 
-	virtual void multimesh_set_buffer(RID p_multimesh, const Vector<float> &p_buffer) override;
-	virtual Vector<float> multimesh_get_buffer(RID p_multimesh) const override;
+	virtual void _multimesh_set_buffer(RID p_multimesh, const Vector<float> &p_buffer) override;
+	virtual Vector<float> _multimesh_get_buffer(RID p_multimesh) const override;
 
-	virtual void multimesh_set_visible_instances(RID p_multimesh, int p_visible) override;
-	virtual int multimesh_get_visible_instances(RID p_multimesh) const override;
+	virtual void _multimesh_set_visible_instances(RID p_multimesh, int p_visible) override;
+	virtual int _multimesh_get_visible_instances(RID p_multimesh) const override;
 
-	virtual AABB multimesh_get_aabb(RID p_multimesh) const override;
+	virtual void _multimesh_set_custom_aabb(RID p_multimesh, const AABB &p_aabb) override;
+	virtual AABB _multimesh_get_custom_aabb(RID p_multimesh) const override;
+
+	virtual AABB _multimesh_get_aabb(RID p_multimesh) const override;
+
+	virtual MultiMeshInterpolator *_multimesh_get_interpolator(RID p_multimesh) const override;
 
 	void _update_dirty_multimeshes();
 	void _multimesh_get_motion_vectors_offsets(RID p_multimesh, uint32_t &r_current_offset, uint32_t &r_prev_offset);

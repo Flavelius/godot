@@ -29,10 +29,12 @@
 /**************************************************************************/
 
 #include "core_bind.h"
+#include "core_bind.compat.inc"
 
 #include "core/config/project_settings.h"
 #include "core/crypto/crypto_core.h"
 #include "core/debugger/engine_debugger.h"
+#include "core/debugger/script_debugger.h"
 #include "core/io/file_access_compressed.h"
 #include "core/io/file_access_encrypted.h"
 #include "core/io/marshalls.h"
@@ -114,6 +116,11 @@ bool ResourceLoader::has_cached(const String &p_path) {
 	return ResourceCache::has(local_path);
 }
 
+Ref<Resource> ResourceLoader::get_cached_ref(const String &p_path) {
+	String local_path = ProjectSettings::get_singleton()->localize_path(p_path);
+	return ResourceCache::get_ref(local_path);
+}
+
 bool ResourceLoader::exists(const String &p_path, const String &p_type_hint) {
 	return ::ResourceLoader::exists(p_path, p_type_hint);
 }
@@ -134,6 +141,7 @@ void ResourceLoader::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_abort_on_missing_resources", "abort"), &ResourceLoader::set_abort_on_missing_resources);
 	ClassDB::bind_method(D_METHOD("get_dependencies", "path"), &ResourceLoader::get_dependencies);
 	ClassDB::bind_method(D_METHOD("has_cached", "path"), &ResourceLoader::has_cached);
+	ClassDB::bind_method(D_METHOD("get_cached_ref", "path"), &ResourceLoader::get_cached_ref);
 	ClassDB::bind_method(D_METHOD("exists", "path", "type_hint"), &ResourceLoader::exists, DEFVAL(""));
 	ClassDB::bind_method(D_METHOD("get_resource_uid", "path"), &ResourceLoader::get_resource_uid);
 
@@ -145,17 +153,17 @@ void ResourceLoader::_bind_methods() {
 	BIND_ENUM_CONSTANT(CACHE_MODE_IGNORE);
 	BIND_ENUM_CONSTANT(CACHE_MODE_REUSE);
 	BIND_ENUM_CONSTANT(CACHE_MODE_REPLACE);
+	BIND_ENUM_CONSTANT(CACHE_MODE_IGNORE_DEEP);
+	BIND_ENUM_CONSTANT(CACHE_MODE_REPLACE_DEEP);
 }
 
 ////// ResourceSaver //////
 
 Error ResourceSaver::save(const Ref<Resource> &p_resource, const String &p_path, BitField<SaverFlags> p_flags) {
-	ERR_FAIL_COND_V_MSG(p_resource.is_null(), ERR_INVALID_PARAMETER, "Can't save empty resource to path '" + p_path + "'.");
 	return ::ResourceSaver::save(p_resource, p_path, p_flags);
 }
 
 Vector<String> ResourceSaver::get_recognized_extensions(const Ref<Resource> &p_resource) {
-	ERR_FAIL_COND_V_MSG(p_resource.is_null(), Vector<String>(), "It's not a reference to a valid Resource object.");
 	List<String> exts;
 	::ResourceSaver::get_recognized_extensions(p_resource, &exts);
 	Vector<String> ret;
@@ -192,6 +200,18 @@ void ResourceSaver::_bind_methods() {
 }
 
 ////// OS //////
+
+PackedByteArray OS::get_entropy(int p_bytes) {
+	PackedByteArray pba;
+	pba.resize(p_bytes);
+	Error err = ::OS::get_singleton()->get_entropy(pba.ptrw(), p_bytes);
+	ERR_FAIL_COND_V(err != OK, PackedByteArray());
+	return pba;
+}
+
+String OS::get_system_ca_certificates() {
+	return ::OS::get_singleton()->get_system_ca_certificates();
+}
 
 PackedStringArray OS::get_connected_midi_inputs() {
 	return ::OS::get_singleton()->get_connected_midi_inputs();
@@ -257,7 +277,7 @@ String OS::get_executable_path() const {
 	return ::OS::get_singleton()->get_executable_path();
 }
 
-Error OS::shell_open(String p_uri) {
+Error OS::shell_open(const String &p_uri) {
 	if (p_uri.begins_with("res://")) {
 		WARN_PRINT("Attempting to open an URL with the \"res://\" protocol. Use `ProjectSettings.globalize_path()` to convert a Godot-specific path to a system path before opening it with `OS.shell_open()`.");
 	} else if (p_uri.begins_with("user://")) {
@@ -266,7 +286,7 @@ Error OS::shell_open(String p_uri) {
 	return ::OS::get_singleton()->shell_open(p_uri);
 }
 
-Error OS::shell_show_in_file_manager(String p_path, bool p_open_folder) {
+Error OS::shell_show_in_file_manager(const String &p_path, bool p_open_folder) {
 	if (p_path.begins_with("res://")) {
 		WARN_PRINT("Attempting to explore file path with the \"res://\" protocol. Use `ProjectSettings.globalize_path()` to convert a Godot-specific path to a system path before opening it with `OS.shell_show_in_file_manager()`.");
 	} else if (p_path.begins_with("user://")) {
@@ -281,8 +301,8 @@ String OS::read_string_from_stdin() {
 
 int OS::execute(const String &p_path, const Vector<String> &p_arguments, Array r_output, bool p_read_stderr, bool p_open_console) {
 	List<String> args;
-	for (int i = 0; i < p_arguments.size(); i++) {
-		args.push_back(p_arguments[i]);
+	for (const String &arg : p_arguments) {
+		args.push_back(arg);
 	}
 	String pipe;
 	int exitcode = 0;
@@ -294,10 +314,18 @@ int OS::execute(const String &p_path, const Vector<String> &p_arguments, Array r
 	return exitcode;
 }
 
+Dictionary OS::execute_with_pipe(const String &p_path, const Vector<String> &p_arguments) {
+	List<String> args;
+	for (const String &arg : p_arguments) {
+		args.push_back(arg);
+	}
+	return ::OS::get_singleton()->execute_with_pipe(p_path, args);
+}
+
 int OS::create_instance(const Vector<String> &p_arguments) {
 	List<String> args;
-	for (int i = 0; i < p_arguments.size(); i++) {
-		args.push_back(p_arguments[i]);
+	for (const String &arg : p_arguments) {
+		args.push_back(arg);
 	}
 	::OS::ProcessID pid = 0;
 	Error err = ::OS::get_singleton()->create_instance(args, &pid);
@@ -309,8 +337,8 @@ int OS::create_instance(const Vector<String> &p_arguments) {
 
 int OS::create_process(const String &p_path, const Vector<String> &p_arguments, bool p_open_console) {
 	List<String> args;
-	for (int i = 0; i < p_arguments.size(); i++) {
-		args.push_back(p_arguments[i]);
+	for (const String &arg : p_arguments) {
+		args.push_back(arg);
 	}
 	::OS::ProcessID pid = 0;
 	Error err = ::OS::get_singleton()->create_process(p_path, args, &pid, p_open_console);
@@ -326,6 +354,10 @@ Error OS::kill(int p_pid) {
 
 bool OS::is_process_running(int p_pid) const {
 	return ::OS::get_singleton()->is_process_running(p_pid);
+}
+
+int OS::get_process_exit_code(int p_pid) const {
+	return ::OS::get_singleton()->get_process_exit_code(p_pid);
 }
 
 int OS::get_process_id() const {
@@ -560,6 +592,8 @@ String OS::get_unique_id() const {
 OS *OS::singleton = nullptr;
 
 void OS::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("get_entropy", "size"), &OS::get_entropy);
+	ClassDB::bind_method(D_METHOD("get_system_ca_certificates"), &OS::get_system_ca_certificates);
 	ClassDB::bind_method(D_METHOD("get_connected_midi_inputs"), &OS::get_connected_midi_inputs);
 	ClassDB::bind_method(D_METHOD("open_midi_inputs"), &OS::open_midi_inputs);
 	ClassDB::bind_method(D_METHOD("close_midi_inputs"), &OS::close_midi_inputs);
@@ -585,12 +619,14 @@ void OS::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_executable_path"), &OS::get_executable_path);
 	ClassDB::bind_method(D_METHOD("read_string_from_stdin"), &OS::read_string_from_stdin);
 	ClassDB::bind_method(D_METHOD("execute", "path", "arguments", "output", "read_stderr", "open_console"), &OS::execute, DEFVAL(Array()), DEFVAL(false), DEFVAL(false));
+	ClassDB::bind_method(D_METHOD("execute_with_pipe", "path", "arguments"), &OS::execute_with_pipe);
 	ClassDB::bind_method(D_METHOD("create_process", "path", "arguments", "open_console"), &OS::create_process, DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("create_instance", "arguments"), &OS::create_instance);
 	ClassDB::bind_method(D_METHOD("kill", "pid"), &OS::kill);
 	ClassDB::bind_method(D_METHOD("shell_open", "uri"), &OS::shell_open);
 	ClassDB::bind_method(D_METHOD("shell_show_in_file_manager", "file_or_dir_path", "open_folder"), &OS::shell_show_in_file_manager, DEFVAL(true));
 	ClassDB::bind_method(D_METHOD("is_process_running", "pid"), &OS::is_process_running);
+	ClassDB::bind_method(D_METHOD("get_process_exit_code", "pid"), &OS::get_process_exit_code);
 	ClassDB::bind_method(D_METHOD("get_process_id"), &OS::get_process_id);
 
 	ClassDB::bind_method(D_METHOD("has_environment", "variable"), &OS::has_environment);
@@ -662,6 +698,8 @@ void OS::_bind_methods() {
 
 	BIND_ENUM_CONSTANT(RENDERING_DRIVER_VULKAN);
 	BIND_ENUM_CONSTANT(RENDERING_DRIVER_OPENGL3);
+	BIND_ENUM_CONSTANT(RENDERING_DRIVER_D3D12);
+	BIND_ENUM_CONSTANT(RENDERING_DRIVER_METAL);
 
 	BIND_ENUM_CONSTANT(SYSTEM_DIR_DESKTOP);
 	BIND_ENUM_CONSTANT(SYSTEM_DIR_DCIM);
@@ -1039,6 +1077,10 @@ Vector<Vector3> Geometry3D::clip_polygon(const Vector<Vector3> &p_points, const 
 	return ::Geometry3D::clip_polygon(p_points, p_plane);
 }
 
+Vector<int32_t> Geometry3D::tetrahedralize_delaunay(const Vector<Vector3> &p_points) {
+	return ::Geometry3D::tetrahedralize_delaunay(p_points);
+}
+
 void Geometry3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("compute_convex_mesh_points", "planes"), &Geometry3D::compute_convex_mesh_points);
 	ClassDB::bind_method(D_METHOD("build_box_planes", "extents"), &Geometry3D::build_box_planes);
@@ -1060,6 +1102,7 @@ void Geometry3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("segment_intersects_convex", "from", "to", "planes"), &Geometry3D::segment_intersects_convex);
 
 	ClassDB::bind_method(D_METHOD("clip_polygon", "points", "plane"), &Geometry3D::clip_polygon);
+	ClassDB::bind_method(D_METHOD("tetrahedralize_delaunay", "points"), &Geometry3D::tetrahedralize_delaunay);
 }
 
 ////// Marshalls //////
@@ -1174,14 +1217,15 @@ bool Semaphore::try_wait() {
 	return semaphore.try_wait();
 }
 
-void Semaphore::post() {
-	semaphore.post();
+void Semaphore::post(int p_count) {
+	ERR_FAIL_COND(p_count <= 0);
+	semaphore.post(p_count);
 }
 
 void Semaphore::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("wait"), &Semaphore::wait);
 	ClassDB::bind_method(D_METHOD("try_wait"), &Semaphore::try_wait);
-	ClassDB::bind_method(D_METHOD("post"), &Semaphore::post);
+	ClassDB::bind_method(D_METHOD("post", "count"), &Semaphore::post, DEFVAL(1));
 }
 
 ////// Mutex //////
@@ -1369,11 +1413,11 @@ Variant ClassDB::instantiate(const StringName &p_class) const {
 	}
 }
 
-bool ClassDB::class_has_signal(StringName p_class, StringName p_signal) const {
+bool ClassDB::class_has_signal(const StringName &p_class, const StringName &p_signal) const {
 	return ::ClassDB::has_signal(p_class, p_signal);
 }
 
-Dictionary ClassDB::class_get_signal(StringName p_class, StringName p_signal) const {
+Dictionary ClassDB::class_get_signal(const StringName &p_class, const StringName &p_signal) const {
 	MethodInfo signal;
 	if (::ClassDB::get_signal(p_class, p_signal, &signal)) {
 		return signal.operator Dictionary();
@@ -1382,7 +1426,7 @@ Dictionary ClassDB::class_get_signal(StringName p_class, StringName p_signal) co
 	}
 }
 
-TypedArray<Dictionary> ClassDB::class_get_signal_list(StringName p_class, bool p_no_inheritance) const {
+TypedArray<Dictionary> ClassDB::class_get_signal_list(const StringName &p_class, bool p_no_inheritance) const {
 	List<MethodInfo> signals;
 	::ClassDB::get_signal_list(p_class, &signals, p_no_inheritance);
 	TypedArray<Dictionary> ret;
@@ -1394,7 +1438,7 @@ TypedArray<Dictionary> ClassDB::class_get_signal_list(StringName p_class, bool p
 	return ret;
 }
 
-TypedArray<Dictionary> ClassDB::class_get_property_list(StringName p_class, bool p_no_inheritance) const {
+TypedArray<Dictionary> ClassDB::class_get_property_list(const StringName &p_class, bool p_no_inheritance) const {
 	List<PropertyInfo> plist;
 	::ClassDB::get_property_list(p_class, &plist, p_no_inheritance);
 	TypedArray<Dictionary> ret;
@@ -1403,6 +1447,14 @@ TypedArray<Dictionary> ClassDB::class_get_property_list(StringName p_class, bool
 	}
 
 	return ret;
+}
+
+StringName ClassDB::class_get_property_getter(const StringName &p_class, const StringName &p_property) {
+	return ::ClassDB::get_property_getter(p_class, p_property);
+}
+
+StringName ClassDB::class_get_property_setter(const StringName &p_class, const StringName &p_property) {
+	return ::ClassDB::get_property_setter(p_class, p_property);
 }
 
 Variant ClassDB::class_get_property(Object *p_object, const StringName &p_property) const {
@@ -1422,11 +1474,24 @@ Error ClassDB::class_set_property(Object *p_object, const StringName &p_property
 	return OK;
 }
 
-bool ClassDB::class_has_method(StringName p_class, StringName p_method, bool p_no_inheritance) const {
+Variant ClassDB::class_get_property_default_value(const StringName &p_class, const StringName &p_property) const {
+	bool valid;
+	Variant ret = ::ClassDB::class_get_default_property_value(p_class, p_property, &valid);
+	if (valid) {
+		return ret;
+	}
+	return Variant();
+}
+
+bool ClassDB::class_has_method(const StringName &p_class, const StringName &p_method, bool p_no_inheritance) const {
 	return ::ClassDB::has_method(p_class, p_method, p_no_inheritance);
 }
 
-TypedArray<Dictionary> ClassDB::class_get_method_list(StringName p_class, bool p_no_inheritance) const {
+int ClassDB::class_get_method_argument_count(const StringName &p_class, const StringName &p_method, bool p_no_inheritance) const {
+	return ::ClassDB::get_method_argument_count(p_class, p_method, nullptr, p_no_inheritance);
+}
+
+TypedArray<Dictionary> ClassDB::class_get_method_list(const StringName &p_class, bool p_no_inheritance) const {
 	List<MethodInfo> methods;
 	::ClassDB::get_method_list(p_class, &methods, p_no_inheritance);
 	TypedArray<Dictionary> ret;
@@ -1442,6 +1507,23 @@ TypedArray<Dictionary> ClassDB::class_get_method_list(StringName p_class, bool p
 	}
 
 	return ret;
+}
+
+Variant ClassDB::class_call_static_method(const Variant **p_arguments, int p_argcount, Callable::CallError &r_call_error) {
+	if (p_argcount < 2) {
+		r_call_error.error = Callable::CallError::CALL_ERROR_TOO_FEW_ARGUMENTS;
+		return Variant::NIL;
+	}
+	if (!p_arguments[0]->is_string() || !p_arguments[1]->is_string()) {
+		r_call_error.error = Callable::CallError::CALL_ERROR_INVALID_ARGUMENT;
+		return Variant::NIL;
+	}
+	StringName class_ = *p_arguments[0];
+	StringName method = *p_arguments[1];
+	const MethodBind *bind = ::ClassDB::get_method(class_, method);
+	ERR_FAIL_NULL_V_MSG(bind, Variant::NIL, "Cannot find static method.");
+	ERR_FAIL_COND_V_MSG(!bind->is_static(), Variant::NIL, "Method is not static.");
+	return bind->call(nullptr, p_arguments + 2, p_argcount - 2, r_call_error);
 }
 
 PackedStringArray ClassDB::class_get_integer_constant_list(const StringName &p_class, bool p_no_inheritance) const {
@@ -1507,9 +1589,37 @@ StringName ClassDB::class_get_integer_constant_enum(const StringName &p_class, c
 	return ::ClassDB::get_integer_constant_enum(p_class, p_name, p_no_inheritance);
 }
 
-bool ClassDB::is_class_enabled(StringName p_class) const {
+bool ClassDB::is_class_enum_bitfield(const StringName &p_class, const StringName &p_enum, bool p_no_inheritance) const {
+	return ::ClassDB::is_enum_bitfield(p_class, p_enum, p_no_inheritance);
+}
+
+bool ClassDB::is_class_enabled(const StringName &p_class) const {
 	return ::ClassDB::is_class_enabled(p_class);
 }
+
+#ifdef TOOLS_ENABLED
+void ClassDB::get_argument_options(const StringName &p_function, int p_idx, List<String> *r_options) const {
+	const String pf = p_function;
+	bool first_argument_is_class = false;
+	if (p_idx == 0) {
+		first_argument_is_class = (pf == "get_inheriters_from_class" || pf == "get_parent_class" ||
+				pf == "class_exists" || pf == "can_instantiate" || pf == "instantiate" ||
+				pf == "class_has_signal" || pf == "class_get_signal" || pf == "class_get_signal_list" ||
+				pf == "class_get_property_list" || pf == "class_get_property" || pf == "class_set_property" ||
+				pf == "class_has_method" || pf == "class_get_method_list" ||
+				pf == "class_get_integer_constant_list" || pf == "class_has_integer_constant" || pf == "class_get_integer_constant" ||
+				pf == "class_has_enum" || pf == "class_get_enum_list" || pf == "class_get_enum_constants" || pf == "class_get_integer_constant_enum" ||
+				pf == "is_class_enabled" || pf == "is_class_enum_bitfield");
+	}
+	if (first_argument_is_class || pf == "is_parent_class") {
+		for (const String &E : get_class_list()) {
+			r_options->push_back(E.quote());
+		}
+	}
+
+	Object::get_argument_options(p_function, p_idx, r_options);
+}
+#endif
 
 void ClassDB::_bind_methods() {
 	::ClassDB::bind_method(D_METHOD("get_class_list"), &ClassDB::get_class_list);
@@ -1525,12 +1635,20 @@ void ClassDB::_bind_methods() {
 	::ClassDB::bind_method(D_METHOD("class_get_signal_list", "class", "no_inheritance"), &ClassDB::class_get_signal_list, DEFVAL(false));
 
 	::ClassDB::bind_method(D_METHOD("class_get_property_list", "class", "no_inheritance"), &ClassDB::class_get_property_list, DEFVAL(false));
+	::ClassDB::bind_method(D_METHOD("class_get_property_getter", "class", "property"), &ClassDB::class_get_property_getter);
+	::ClassDB::bind_method(D_METHOD("class_get_property_setter", "class", "property"), &ClassDB::class_get_property_setter);
 	::ClassDB::bind_method(D_METHOD("class_get_property", "object", "property"), &ClassDB::class_get_property);
 	::ClassDB::bind_method(D_METHOD("class_set_property", "object", "property", "value"), &ClassDB::class_set_property);
 
+	::ClassDB::bind_method(D_METHOD("class_get_property_default_value", "class", "property"), &ClassDB::class_get_property_default_value);
+
 	::ClassDB::bind_method(D_METHOD("class_has_method", "class", "method", "no_inheritance"), &ClassDB::class_has_method, DEFVAL(false));
 
+	::ClassDB::bind_method(D_METHOD("class_get_method_argument_count", "class", "method", "no_inheritance"), &ClassDB::class_get_method_argument_count, DEFVAL(false));
+
 	::ClassDB::bind_method(D_METHOD("class_get_method_list", "class", "no_inheritance"), &ClassDB::class_get_method_list, DEFVAL(false));
+
+	::ClassDB::bind_vararg_method(METHOD_FLAGS_DEFAULT, "class_call_static_method", &ClassDB::class_call_static_method, MethodInfo("class_call_static_method", PropertyInfo(Variant::STRING_NAME, "class"), PropertyInfo(Variant::STRING_NAME, "method")));
 
 	::ClassDB::bind_method(D_METHOD("class_get_integer_constant_list", "class", "no_inheritance"), &ClassDB::class_get_integer_constant_list, DEFVAL(false));
 
@@ -1541,6 +1659,8 @@ void ClassDB::_bind_methods() {
 	::ClassDB::bind_method(D_METHOD("class_get_enum_list", "class", "no_inheritance"), &ClassDB::class_get_enum_list, DEFVAL(false));
 	::ClassDB::bind_method(D_METHOD("class_get_enum_constants", "class", "enum", "no_inheritance"), &ClassDB::class_get_enum_constants, DEFVAL(false));
 	::ClassDB::bind_method(D_METHOD("class_get_integer_constant_enum", "class", "name", "no_inheritance"), &ClassDB::class_get_integer_constant_enum, DEFVAL(false));
+
+	::ClassDB::bind_method(D_METHOD("is_class_enum_bitfield", "class", "enum", "no_inheritance"), &ClassDB::is_class_enum_bitfield, DEFVAL(false));
 
 	::ClassDB::bind_method(D_METHOD("is_class_enabled", "class"), &ClassDB::is_class_enabled);
 }
@@ -1656,7 +1776,7 @@ Object *Engine::get_singleton_object(const StringName &p_name) const {
 
 void Engine::register_singleton(const StringName &p_name, Object *p_object) {
 	ERR_FAIL_COND_MSG(has_singleton(p_name), "Singleton already registered: " + String(p_name));
-	ERR_FAIL_COND_MSG(!String(p_name).is_valid_identifier(), "Singleton name is not a valid identifier: " + p_name);
+	ERR_FAIL_COND_MSG(!String(p_name).is_valid_ascii_identifier(), "Singleton name is not a valid identifier: " + p_name);
 	::Engine::Singleton s;
 	s.class_name = p_name;
 	s.name = p_name;
@@ -1716,6 +1836,18 @@ void Engine::set_print_error_messages(bool p_enabled) {
 bool Engine::is_printing_error_messages() const {
 	return ::Engine::get_singleton()->is_printing_error_messages();
 }
+
+#ifdef TOOLS_ENABLED
+void Engine::get_argument_options(const StringName &p_function, int p_idx, List<String> *r_options) const {
+	const String pf = p_function;
+	if (p_idx == 0 && (pf == "has_singleton" || pf == "get_singleton" || pf == "unregister_singleton")) {
+		for (const String &E : get_singleton_list()) {
+			r_options->push_back(E.quote());
+		}
+	}
+	Object::get_argument_options(p_function, p_idx, r_options);
+}
+#endif
 
 void Engine::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_physics_ticks_per_second", "physics_ticks_per_second"), &Engine::set_physics_ticks_per_second);
@@ -1840,9 +1972,19 @@ void EngineDebugger::send_message(const String &p_msg, const Array &p_data) {
 	::EngineDebugger::get_singleton()->send_message(p_msg, p_data);
 }
 
+void EngineDebugger::debug(bool p_can_continue, bool p_is_error_breakpoint) {
+	ERR_FAIL_COND_MSG(!::EngineDebugger::is_active(), "Can't send debug. No active debugger");
+	::EngineDebugger::get_singleton()->debug(p_can_continue, p_is_error_breakpoint);
+}
+
+void EngineDebugger::script_debug(ScriptLanguage *p_lang, bool p_can_continue, bool p_is_error_breakpoint) {
+	ERR_FAIL_COND_MSG(!::EngineDebugger::get_script_debugger(), "Can't send debug. No active debugger");
+	::EngineDebugger::get_script_debugger()->debug(p_lang, p_can_continue, p_is_error_breakpoint);
+}
+
 Error EngineDebugger::call_capture(void *p_user, const String &p_cmd, const Array &p_data, bool &r_captured) {
 	Callable &capture = *(Callable *)p_user;
-	if (capture.is_null()) {
+	if (!capture.is_valid()) {
 		return FAILED;
 	}
 	Variant cmd = p_cmd, data = p_data;
@@ -1854,6 +1996,56 @@ Error EngineDebugger::call_capture(void *p_user, const String &p_cmd, const Arra
 	ERR_FAIL_COND_V_MSG(retval.get_type() != Variant::BOOL, FAILED, "Error calling 'capture' to callable: " + String(capture) + ". Return type is not bool.");
 	r_captured = retval;
 	return OK;
+}
+
+void EngineDebugger::line_poll() {
+	ERR_FAIL_COND_MSG(!::EngineDebugger::is_active(), "Can't poll. No active debugger");
+	::EngineDebugger::get_singleton()->line_poll();
+}
+
+void EngineDebugger::set_lines_left(int p_lines) {
+	ERR_FAIL_COND_MSG(!::EngineDebugger::get_script_debugger(), "Can't set lines left. No active debugger");
+	::EngineDebugger::get_script_debugger()->set_lines_left(p_lines);
+}
+
+int EngineDebugger::get_lines_left() const {
+	ERR_FAIL_COND_V_MSG(!::EngineDebugger::get_script_debugger(), 0, "Can't get lines left. No active debugger");
+	return ::EngineDebugger::get_script_debugger()->get_lines_left();
+}
+
+void EngineDebugger::set_depth(int p_depth) {
+	ERR_FAIL_COND_MSG(!::EngineDebugger::get_script_debugger(), "Can't set depth. No active debugger");
+	::EngineDebugger::get_script_debugger()->set_depth(p_depth);
+}
+
+int EngineDebugger::get_depth() const {
+	ERR_FAIL_COND_V_MSG(!::EngineDebugger::get_script_debugger(), 0, "Can't get depth. No active debugger");
+	return ::EngineDebugger::get_script_debugger()->get_depth();
+}
+
+bool EngineDebugger::is_breakpoint(int p_line, const StringName &p_source) const {
+	ERR_FAIL_COND_V_MSG(!::EngineDebugger::get_script_debugger(), false, "Can't check breakpoint. No active debugger");
+	return ::EngineDebugger::get_script_debugger()->is_breakpoint(p_line, p_source);
+}
+
+bool EngineDebugger::is_skipping_breakpoints() const {
+	ERR_FAIL_COND_V_MSG(!::EngineDebugger::get_script_debugger(), false, "Can't check skipping breakpoint. No active debugger");
+	return ::EngineDebugger::get_script_debugger()->is_skipping_breakpoints();
+}
+
+void EngineDebugger::insert_breakpoint(int p_line, const StringName &p_source) {
+	ERR_FAIL_COND_MSG(!::EngineDebugger::get_script_debugger(), "Can't insert breakpoint. No active debugger");
+	::EngineDebugger::get_script_debugger()->insert_breakpoint(p_line, p_source);
+}
+
+void EngineDebugger::remove_breakpoint(int p_line, const StringName &p_source) {
+	ERR_FAIL_COND_MSG(!::EngineDebugger::get_script_debugger(), "Can't remove breakpoint. No active debugger");
+	::EngineDebugger::get_script_debugger()->remove_breakpoint(p_line, p_source);
+}
+
+void EngineDebugger::clear_breakpoints() {
+	ERR_FAIL_COND_MSG(!::EngineDebugger::get_script_debugger(), "Can't clear breakpoints. No active debugger");
+	::EngineDebugger::get_script_debugger()->clear_breakpoints();
 }
 
 EngineDebugger::~EngineDebugger() {
@@ -1881,7 +2073,23 @@ void EngineDebugger::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("unregister_message_capture", "name"), &EngineDebugger::unregister_message_capture);
 	ClassDB::bind_method(D_METHOD("has_capture", "name"), &EngineDebugger::has_capture);
 
+	ClassDB::bind_method(D_METHOD("line_poll"), &EngineDebugger::line_poll);
+
 	ClassDB::bind_method(D_METHOD("send_message", "message", "data"), &EngineDebugger::send_message);
+	ClassDB::bind_method(D_METHOD("debug", "can_continue", "is_error_breakpoint"), &EngineDebugger::debug, DEFVAL(true), DEFVAL(false));
+	ClassDB::bind_method(D_METHOD("script_debug", "language", "can_continue", "is_error_breakpoint"), &EngineDebugger::script_debug, DEFVAL(true), DEFVAL(false));
+
+	ClassDB::bind_method(D_METHOD("set_lines_left", "lines"), &EngineDebugger::set_lines_left);
+	ClassDB::bind_method(D_METHOD("get_lines_left"), &EngineDebugger::get_lines_left);
+
+	ClassDB::bind_method(D_METHOD("set_depth", "depth"), &EngineDebugger::set_depth);
+	ClassDB::bind_method(D_METHOD("get_depth"), &EngineDebugger::get_depth);
+
+	ClassDB::bind_method(D_METHOD("is_breakpoint", "line", "source"), &EngineDebugger::is_breakpoint);
+	ClassDB::bind_method(D_METHOD("is_skipping_breakpoints"), &EngineDebugger::is_skipping_breakpoints);
+	ClassDB::bind_method(D_METHOD("insert_breakpoint", "line", "source"), &EngineDebugger::insert_breakpoint);
+	ClassDB::bind_method(D_METHOD("remove_breakpoint", "line", "source"), &EngineDebugger::remove_breakpoint);
+	ClassDB::bind_method(D_METHOD("clear_breakpoints"), &EngineDebugger::clear_breakpoints);
 }
 
 } // namespace core_bind

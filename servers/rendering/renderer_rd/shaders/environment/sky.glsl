@@ -25,7 +25,7 @@ params;
 void main() {
 	vec2 base_arr[3] = vec2[](vec2(-1.0, -3.0), vec2(-1.0, 1.0), vec2(3.0, 1.0));
 	uv_interp = base_arr[gl_VertexIndex];
-	gl_Position = vec4(uv_interp, 1.0, 1.0);
+	gl_Position = vec4(uv_interp, 0.0, 1.0);
 }
 
 #[fragment]
@@ -158,7 +158,7 @@ vec3 interleaved_gradient_noise(vec2 pos) {
 
 vec4 volumetric_fog_process(vec2 screen_uv) {
 #ifdef USE_MULTIVIEW
-	vec4 reprojected = sky_scene_data.combined_reprojection[ViewIndex] * (vec4(screen_uv * 2.0 - 1.0, 1.0, 1.0) * sky_scene_data.z_far);
+	vec4 reprojected = sky_scene_data.combined_reprojection[ViewIndex] * vec4(screen_uv * 2.0 - 1.0, 0.0, 1.0); // Unproject at the far plane
 	vec3 fog_pos = vec3(reprojected.xy / reprojected.w, 1.0) * 0.5 + 0.5;
 #else
 	vec3 fog_pos = vec3(screen_uv, 1.0);
@@ -187,9 +187,11 @@ void main() {
 	vec3 cube_normal;
 #ifdef USE_MULTIVIEW
 	// In multiview our projection matrices will contain positional and rotational offsets that we need to properly unproject.
-	vec4 unproject = vec4(uv_interp.x, -uv_interp.y, 1.0, 1.0);
+	vec4 unproject = vec4(uv_interp.x, -uv_interp.y, 0.0, 1.0); // unproject at the far plane
 	vec4 unprojected = sky_scene_data.view_inv_projections[ViewIndex] * unproject;
 	cube_normal = unprojected.xyz / unprojected.w;
+
+	// Unproject will give us the position between the eyes, need to re-offset
 	cube_normal += sky_scene_data.view_eye_offsets[ViewIndex].xyz;
 #else
 	cube_normal.z = -1.0;
@@ -253,10 +255,6 @@ void main() {
 	frag_color.rgb = color;
 	frag_color.a = alpha;
 
-	// For mobile renderer we're multiplying by 0.5 as we're using a UNORM buffer.
-	// For both mobile and clustered, we also bake in the exposure value for the environment and camera.
-	frag_color.rgb = frag_color.rgb * params.luminance_multiplier;
-
 #if !defined(DISABLE_FOG) && !defined(USE_CUBEMAP_PASS)
 
 	// Draw "fixed" fog before volumetric fog to ensure volumetric fog can appear in front of the sky.
@@ -275,6 +273,10 @@ void main() {
 	}
 
 #endif // DISABLE_FOG
+
+	// For mobile renderer we're multiplying by 0.5 as we're using a UNORM buffer.
+	// For both mobile and clustered, we also bake in the exposure value for the environment and camera.
+	frag_color.rgb = frag_color.rgb * params.luminance_multiplier;
 
 	// Blending is disabled for Sky, so alpha doesn't blend.
 	// Alpha is used for subsurface scattering so make sure it doesn't get applied to Sky.

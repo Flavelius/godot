@@ -45,6 +45,9 @@ class VisualInstance3D : public Node3D {
 protected:
 	void _update_visibility();
 
+	virtual void _physics_interpolated_changed() override;
+	void set_instance_use_identity_transform(bool p_enable);
+
 	void _notification(int p_what);
 	static void _bind_methods();
 	void _validate_property(PropertyInfo &p_property) const;
@@ -135,7 +138,7 @@ private:
 	GIMode gi_mode = GI_MODE_STATIC;
 	bool ignore_occlusion_culling = false;
 
-	const StringName *_instance_uniform_get_remap(const StringName p_name) const;
+	const StringName *_instance_uniform_get_remap(const StringName &p_name) const;
 
 protected:
 	bool _set(const StringName &p_name, const Variant &p_value);

@@ -34,7 +34,7 @@ void RemoteTransform2D::_update_cache() {
 	cache = ObjectID();
 	if (has_node(remote_node)) {
 		Node *node = get_node(remote_node);
-		if (!node || this == node || node->is_ancestor_of(this) || this->is_ancestor_of(node)) {
+		if (!node || this == node || node->is_ancestor_of(this) || is_ancestor_of(node)) {
 			return;
 		}
 
@@ -112,6 +112,16 @@ void RemoteTransform2D::_notification(int p_what) {
 	switch (p_what) {
 		case NOTIFICATION_ENTER_TREE: {
 			_update_cache();
+		} break;
+
+		case NOTIFICATION_RESET_PHYSICS_INTERPOLATION: {
+			if (cache.is_valid()) {
+				_update_remote();
+				Node2D *n = Object::cast_to<Node2D>(ObjectDB::get_instance(cache));
+				if (n) {
+					n->reset_physics_interpolation();
+				}
+			}
 		} break;
 
 		case NOTIFICATION_LOCAL_TRANSFORM_CHANGED:
